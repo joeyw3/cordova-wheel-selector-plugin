@@ -55,6 +55,18 @@ public class SelectorCordovaPlugin extends CordovaPlugin {
     private static final String NEGATIVE_BUTTON_TEXT_KEY = "negativeButtonText";
     private static final String WRAP_WHEEL_TEXT_KEY = "wrapWheelText";
     private static final String THEME_KEY = "theme";
+    private static final String CHANGE_EVENT = "changeEvent";
+
+    private CallbackContext callbackContext;
+    private String displayKey;
+    private List<PickerView> asFinal = new ArrayList<PickerView>();
+
+    public boolean changeEvent;
+
+    public static enum SelectorResultType {
+        SelectorResultTypeDone,
+        SelectorResultTypeChange
+    }
 
     public void initialize(CordovaInterface cordova, CordovaWebView webView) {
         super.initialize(cordova, webView);
@@ -64,30 +76,35 @@ public class SelectorCordovaPlugin extends CordovaPlugin {
 
         final CordovaInterface cordova = this.cordova; 
 
+        Log.d(TAG, "************Showing Wheel Selector");
+        final JSONObject options = args.getJSONObject(0);
+
+        String config = args.getString(0);
+        Log.d(TAG, "Config options: " + config);
+        final JSONArray items = options.getJSONArray(DISPLAY_ITEMS_KEY);
+        JSONObject tmpDefaultItemsMightNotBeSet = null;
+
+        try {
+            tmpDefaultItemsMightNotBeSet = options.getJSONObject(DEFAULT_SELECTED_ITEMS_KEY);
+        }
+        catch(JSONException je) {
+            tmpDefaultItemsMightNotBeSet = null;
+        }
+
+        final JSONObject defaultSelectedItems = tmpDefaultItemsMightNotBeSet;
+
         if (action.equals("showSelector")) {
-
-            Log.d(TAG, "************Showing Wheel Selector");
-            final JSONObject options = args.getJSONObject(0);
-
-            String config = args.getString(0);
-            Log.d(TAG, "Config options: " + config);
-            final JSONArray items = options.getJSONArray(DISPLAY_ITEMS_KEY);
-            JSONObject tmpDefaultItemsMightNotBeSet = null;
-
-            try {
-                tmpDefaultItemsMightNotBeSet = options.getJSONObject(DEFAULT_SELECTED_ITEMS_KEY);
-            }
-            catch(JSONException je) {
-                tmpDefaultItemsMightNotBeSet = null;
-            }
-
-            final JSONObject defaultSelectedItems = tmpDefaultItemsMightNotBeSet;
-            final String displayKey = options.getString(DISPLAY_KEY);
             final String title = options.getString(TITLE_KEY);
             final String positiveButton = options.getString(POSITIVE_BUTTON_TEXT_KEY);
             final String negativeButton = options.getString(NEGATIVE_BUTTON_TEXT_KEY);
             final String wrapSelectorText = options.getString(WRAP_WHEEL_TEXT_KEY);
             final String theme = options.getString(THEME_KEY);
+
+            this.callbackContext = callbackContext;
+            this.displayKey = options.getString(DISPLAY_KEY);
+            this.changeEvent = options.getBoolean(CHANGE_EVENT);
+
+            SelectorCordovaPlugin me = this;
 
             WHEEL_WRAP = Boolean.parseBoolean(wrapSelectorText);
             SELECTOR_THEME = new SelectorTheme(theme);
@@ -102,12 +119,12 @@ public class SelectorCordovaPlugin extends CordovaPlugin {
                     builder.setCancelable(true);
                     List<PickerView> views = null;
                     try {
-                        views = getPickerViews(cordova.getActivity(), items, defaultSelectedItems);
+                        views = getPickerViews(cordova.getActivity(), items, defaultSelectedItems, me);
                     } catch (JSONException je) {
                         Log.v(TAG, "Exception: " + je.getMessage());
                     }
 
-                    final List<PickerView> asFinal = views;
+                    me.asFinal = views;
                     LinearLayout layout = new LinearLayout(cordova.getActivity());
                     layout.setOrientation(LinearLayout.HORIZONTAL);
 
@@ -130,30 +147,7 @@ public class SelectorCordovaPlugin extends CordovaPlugin {
                                     new DialogInterface.OnClickListener() {
                                         public void onClick(DialogInterface dialog,
                                                             int id) {
-                                            JSONArray userSelectedValues = new JSONArray();
-
-                                            JSONObject jsonValue = null;
-                                            try {
-
-                                                String value;
-                                                for (int i = 0; i < asFinal.size(); ++i) {
-                                                    jsonValue = new JSONObject();
-
-                                                    value = asFinal.get(i).getDataToShow(asFinal.get(i).getNumberPicker().getValue());
-                                                    jsonValue.put(INDEX_KEY, asFinal.get(i).getNumberPicker().getValue());
-
-                                                    if (value != null && value.equalsIgnoreCase(SPACE))
-                                                        jsonValue.put(displayKey, BLANK_STRING);
-                                                    else
-                                                        jsonValue.put(displayKey, value);
-
-                                                    userSelectedValues.put(jsonValue);
-                                                }
-                                            } catch (JSONException je) {
-
-                                            }
-
-                                            final PluginResult resultToReturnToJS = new PluginResult(PluginResult.Status.OK, (userSelectedValues));
+                                            final PluginResult resultToReturnToJS = new PluginResult(PluginResult.Status.OK, (getResults(SelectorResultType.SelectorResultTypeDone)));
                                             callbackContext.sendPluginResult(resultToReturnToJS);
                                             dialog.dismiss();
 
@@ -179,24 +173,41 @@ public class SelectorCordovaPlugin extends CordovaPlugin {
             };
 
             this.cordova.getActivity().runOnUiThread(runnable);
+        } else if (action.equals("updateItems") && this.asFinal.size() != 0) {
+            List<PickerView> existingViews = this.asFinal;
+
+            if(existingViews != null) {
+                for (int i = 0; i < existingViews.size(); ++i) {
+                    if(defaultSelectedItems != null && defaultSelectedItems.length() == items.length()){
+                        try {
+                            String defaultSelctedValue = defaultSelectedItems.getString(Integer.toString(i));
+                            existingViews.get(i).setData(this.toStringArray(items.getJSONArray(i)), defaultSelctedValue);
+                        } catch(JSONException je) {
+                            existingViews.get(i).setData(this.toStringArray(items.getJSONArray(i)), "");
+                        }
+                    } else {
+                        existingViews.get(i).setData(this.toStringArray(items.getJSONArray(i)), "");
+                    }
+                }
+            }
         }
 
         return true;
     }
 
-    public static List<PickerView> getPickerViews(Activity activity, JSONArray items, JSONObject defaultSelectedValues) throws JSONException {
+    public static List<PickerView> getPickerViews(Activity activity, JSONArray items, JSONObject defaultSelectedValues, SelectorCordovaPlugin selectorCordovaPlugin) throws JSONException {
         List<PickerView> views = new ArrayList<PickerView>();
         for (int i = 0; i < items.length(); ++i) {
             if(defaultSelectedValues != null && defaultSelectedValues.length() == items.length()){
 
                 try {
                     String defaultSelctedValue = defaultSelectedValues.getString(Integer.toString(i));
-                    views.add(new PickerView(activity, items.getJSONArray(i), defaultSelctedValue));
+                    views.add(new PickerView(activity, items.getJSONArray(i), defaultSelctedValue, selectorCordovaPlugin));
                 }catch(JSONException je) {
-                    views.add(new PickerView(activity, items.getJSONArray(i), ""));
+                    views.add(new PickerView(activity, items.getJSONArray(i), "", selectorCordovaPlugin));
                 }
             }else {
-                views.add(new PickerView(activity, items.getJSONArray(i), ""));
+                views.add(new PickerView(activity, items.getJSONArray(i), "", selectorCordovaPlugin));
             }
         }
         return views;
@@ -261,6 +272,42 @@ public class SelectorCordovaPlugin extends CordovaPlugin {
         }
         return false;
     }
+
+    public JSONObject getResults(SelectorResultType selectorResultType) {
+        JSONObject result = new JSONObject();
+        JSONArray userSelectedValues = new JSONArray();
+        JSONObject jsonValue = null;
+
+        try {
+            result.put("type", selectorResultType == SelectorResultType.SelectorResultTypeDone ? "confirm" : "change");
+
+            String value;
+
+            for (int i = 0; i < this.asFinal.size(); ++i) {
+                jsonValue = new JSONObject();
+
+                value = this.asFinal.get(i).getDataToShow(this.asFinal.get(i).getNumberPicker().getValue());
+
+                jsonValue.put(INDEX_KEY, this.asFinal.get(i).getNumberPicker().getValue());
+
+                if(value != null && value.equalsIgnoreCase(SPACE)) {
+                    jsonValue.put(this.displayKey, BLANK_STRING);
+                } else {
+                    jsonValue.put(this.displayKey, value);
+                }
+
+                userSelectedValues.put(jsonValue);
+            }
+
+            result.put("selection", userSelectedValues);
+        } catch (JSONException je) {}
+
+        return result;
+    }
+
+    public CallbackContext getCallbackContext() {
+        return this.callbackContext;
+    }
 }
 
 
@@ -269,13 +316,15 @@ class PickerView {
     private String defaultSelectedItemValue;
     private Activity activity;
     private NumberPicker picker;
+    private SelectorCordovaPlugin selectorCordovaPlugin;
 
     private LinearLayout.LayoutParams numPicerParams;
 
-    public PickerView(Activity activity, JSONArray args, String defaulSelectedtItem) {
+    public PickerView(Activity activity, JSONArray args, String defaulSelectedtItem, SelectorCordovaPlugin selectorCordovaPlugin) {
         dataToShow = SelectorCordovaPlugin.toStringArray(args);
         defaultSelectedItemValue = defaulSelectedtItem;
         this.activity = activity;
+        this.selectorCordovaPlugin = selectorCordovaPlugin;
     }
 
     public NumberPicker getNumberPicker() {
@@ -302,6 +351,12 @@ class PickerView {
 
             //turn off soft keyboard
             picker.setDescendantFocusability(NumberPicker.FOCUS_BLOCK_DESCENDANTS);
+
+            if(this.selectorCordovaPlugin.changeEvent) {
+                PickerListener listener = new PickerListener(this.selectorCordovaPlugin);
+                picker.setOnScrollListener(listener);
+                picker.setOnValueChangedListener(listener);   
+            }
             
             setNumberPickerTextColor(picker, SELECTOR_THEME.getNumberPickerTextColor());
         }
@@ -320,6 +375,36 @@ class PickerView {
 
     public String getDataToShow(int index) {
         return dataToShow[index];
+    }
+
+    public void setData(String[] dataToShow, String defaultSelectedItemValue) {
+        int currentMaxValue = picker.getMaxValue();
+        int newMaxValue = (dataToShow.length - 1);
+
+        this.dataToShow = dataToShow;
+        this.defaultSelectedItemValue = defaultSelectedItemValue;
+
+        if(newMaxValue < currentMaxValue) {
+            picker.setMaxValue(newMaxValue);
+        }
+
+        int index = -1;
+
+        if(defaultSelectedItemValue != null && defaultSelectedItemValue.length() > 0) {
+            index = Arrays.asList(dataToShow).indexOf(defaultSelectedItemValue);
+        }
+
+        if(index < 0) {
+            picker.setValue(0);
+        } else {
+            picker.setValue(index);
+        }
+
+        picker.setDisplayedValues(dataToShow);
+
+        if(newMaxValue > currentMaxValue) {
+            picker.setMaxValue(newMaxValue);
+        }
     }
 }
 
@@ -348,8 +433,36 @@ class SelectorTheme {
     }
 }
 
+class PickerListener implements NumberPicker.OnScrollListener, NumberPicker.OnValueChangeListener {
+    private int lastScrollState = 0;
+    private int selectedValue;
+    private SelectorCordovaPlugin selectorCordovaPlugin;
 
+    public PickerListener(SelectorCordovaPlugin selectorCordovaPlugin) {
+        this.selectorCordovaPlugin = selectorCordovaPlugin;
+    }
 
+    @Override
+    public void onScrollStateChange(NumberPicker view, int scrollState) {
+        this.lastScrollState = scrollState;
 
+        valueHasChanged();
+    }
 
+    @Override
+    public void onValueChange(NumberPicker picker, int oldVal, int newVal) {
+        this.selectedValue = newVal;
 
+        valueHasChanged();
+    }
+
+    public void valueHasChanged() {
+        if(this.lastScrollState == SCROLL_STATE_IDLE) {
+            final PluginResult pluginResult = new PluginResult(PluginResult.Status.OK, (selectorCordovaPlugin.getResults(SelectorCordovaPlugin.SelectorResultType.SelectorResultTypeChange)));
+
+            pluginResult.setKeepCallback(true);
+
+            selectorCordovaPlugin.getCallbackContext().sendPluginResult(pluginResult);
+        }
+    }
+}

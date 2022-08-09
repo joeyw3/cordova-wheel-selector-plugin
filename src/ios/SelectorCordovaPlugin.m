@@ -14,7 +14,8 @@
 
 typedef NS_ENUM(NSInteger, SelectorResultType) {
   SelectorResultTypeCanceled = 0,
-  SelectorResultTypeDone = 1
+  SelectorResultTypeDone = 1,
+  SelectorResultTypeChange = 2
 };
 
 @interface SelectorCordovaPlugin () <UIActionSheetDelegate, UIPopoverControllerDelegate, UIPickerViewDelegate, UIPickerViewDataSource>
@@ -73,6 +74,40 @@ typedef NS_ENUM(NSInteger, SelectorResultType) {
 
   _callbackId = command.callbackId;
   [self didDismissWithCancelButton:self];
+}
+
+- (void)updateItems:(CDVInvokedUrlCommand *)command {
+  NSArray *sortedKeys = [[_itemsSelectedIndexes allKeys] sortedArrayUsingSelector: @selector(compare:)];
+  NSDictionary *newOptions = [command.arguments objectAtIndex:0];
+  NSArray *newItems = [newOptions objectForKey:@"displayItems"];
+  NSDictionary *defaultItems = [newOptions objectForKey:@"defaultItems"];
+
+  for(NSString *key in sortedKeys) {
+    NSInteger indexInDict = [key integerValue];
+    NSInteger index = [[_itemsSelectedIndexes objectForKey:key] integerValue];
+    NSString *value = _items[indexInDict][index];
+    NSUInteger newIndex = [[newItems objectAtIndex:indexInDict] indexOfObject:value];
+
+    if(defaultItems || (NSNotFound == newIndex)) {
+      NSInteger newValueIndex = 0;
+
+      if(defaultItems) {
+        NSString *selectedValue = [defaultItems objectForKey:key];
+        NSUInteger selectedIndex = [[newItems objectAtIndex:indexInDict] indexOfObject:selectedValue];
+
+        if(NSNotFound != selectedIndex) {
+          newValueIndex = selectedIndex;
+        }
+      }
+
+      [_itemsSelectedIndexes setValue:@(newValueIndex) forKey:key];
+      [_pickerView selectRow:newValueIndex inComponent:indexInDict animated:NO];
+    }
+  }
+
+  _items = newItems;
+
+  [_pickerView reloadAllComponents];
 }
 
 - (UIView *)createPickerView {
@@ -146,7 +181,8 @@ typedef NS_ENUM(NSInteger, SelectorResultType) {
 - (void)sendResultsFromPickerView:(UIPickerView *)pickerView resultType:(SelectorResultType)resultType {
   CDVPluginResult *pluginResult;
 
-  if (resultType == SelectorResultTypeDone) {
+  if (resultType == SelectorResultTypeDone || resultType == SelectorResultTypeChange) {
+    NSString *type = (resultType == SelectorResultTypeDone) ? @"confirm" : @"change";
     NSMutableArray *arr = [[NSMutableArray alloc] init];
     NSArray *sortedKeys = [[_itemsSelectedIndexes allKeys] sortedArrayUsingSelector: @selector(compare:)];
 
@@ -164,7 +200,15 @@ typedef NS_ENUM(NSInteger, SelectorResultType) {
       [arr addObject:tmpDictionary];
     }
 
-    pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArray:arr];
+    NSDictionary *result = [NSDictionary dictionaryWithObjectsAndKeys:
+                                     type, @"type",
+                                     arr, @"selection", nil];
+
+    pluginResult = [CDVPluginResult resultWithStatus:CDVCommandStatus_OK messageAsArray:result];
+
+    if(resultType == SelectorResultTypeChange) {
+      [pluginResult setKeepCallbackAsBool:YES];
+    }
   }
 
   if (resultType == SelectorResultTypeCanceled) {
@@ -172,7 +216,10 @@ typedef NS_ENUM(NSInteger, SelectorResultType) {
   }
 
   [self.commandDelegate sendPluginResult:pluginResult callbackId:_callbackId];
-  _callbackId = nil;
+  
+  if(resultType != SelectorResultTypeChange) {
+    _callbackId = nil;
+  }
 }
 
 #pragma mark - Show picker
@@ -289,6 +336,10 @@ typedef NS_ENUM(NSInteger, SelectorResultType) {
   // The parameters named row and component represents what was selected.
   NSString* key = [NSString stringWithFormat:@"%li", (long)component];
   [_itemsSelectedIndexes setValue:@(row) forKey:key];
+  
+  if([[_options objectForKey:@"changeEvent"] boolValue]) {
+    [self sendResultsFromPickerView:_pickerView resultType:SelectorResultTypeChange];
+  }
 }
 
 - (UIView *)pickerView:(UIPickerView *)pickerView viewForRow:(NSInteger)row forComponent:(NSInteger)component reusingView:(UIView *)view {

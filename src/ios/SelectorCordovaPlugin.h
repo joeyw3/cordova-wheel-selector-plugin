@@ -5,5 +5,6 @@
 
 - (void)showSelector:(CDVInvokedUrlCommand *)command;
 - (void)hideSelector:(CDVInvokedUrlCommand *)command;
+- (void)updateItems:(CDVInvokedUrlCommand *)command;
 
 @end
